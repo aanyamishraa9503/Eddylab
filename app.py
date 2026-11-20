@@ -10,9 +10,9 @@ from physics import (
 )
 
 
-# ------------------------------------------------
-# PAGE CONFIGURATION
-# ------------------------------------------------
+# ==================================================
+# 1. PAGE CONFIGURATION AND SESSION STATE
+# ==================================================
 
 st.set_page_config(
     page_title="EddyLab | Virtual Physics Laboratory",
@@ -20,14 +20,16 @@ st.set_page_config(
     layout="wide"
 )
 
-# Preserve simulation state across Streamlit reruns
 if "run_simulation" not in st.session_state:
     st.session_state["run_simulation"] = False
 
+if "experiment_trials" not in st.session_state:
+    st.session_state["experiment_trials"] = []
 
-# ------------------------------------------------
-# APPLICATION HEADER
-# ------------------------------------------------
+
+# ==================================================
+# 2. APPLICATION HEADER
+# ==================================================
 
 st.title("⚙️ EDDYLAB")
 st.subheader("Virtual Physics Laboratory")
@@ -35,15 +37,60 @@ st.caption("Interactive Simulation of Eddy Current Braking")
 
 st.divider()
 
+
+# ==================================================
+# 3. EXPERIMENT OVERVIEW
+# ==================================================
+
+with st.expander("Experiment Overview", expanded=True):
+
+    st.subheader("Aim")
+
+    st.write(
+        "To investigate how magnetic field strength affects "
+        "the braking behaviour of a rotating conducting disc."
+    )
+
+    st.subheader("Hypothesis")
+
+    st.write(
+        "According to the simplified model, increasing magnetic "
+        "field strength increases the effective braking coefficient "
+        "and causes angular velocity to decrease more rapidly."
+    )
+
+    st.subheader("Experimental Variables")
+
+    st.markdown("""
+    - **Independent variable:** Magnetic field strength (T)
+    - **Dependent variables:** Angular velocity, braking torque
+      and rotational kinetic energy
+    - **Controlled variables:** Initial angular velocity,
+      moment of inertia and effective system constant
+    """)
+
+    st.subheader("Experiment Procedure")
+
+    st.markdown("""
+    1. Set the initial angular velocity of the disc.
+    2. Set the moment of inertia.
+    3. Choose a magnetic field strength.
+    4. Keep the other parameters constant.
+    5. Run the simulation.
+    6. Observe the angular velocity and braking torque graphs.
+    7. Repeat with different magnetic field strengths.
+    8. Compare the results and draw a conclusion.
+    """)
+
 st.markdown("""
 Explore how electromagnetic braking affects the rotational
 motion of a conducting disc using a simplified mathematical model.
 """)
 
 
-# ------------------------------------------------
-# SIDEBAR - SIMULATION PARAMETERS
-# ------------------------------------------------
+# ==================================================
+# 4. SIDEBAR - SIMULATION PARAMETERS
+# ==================================================
 
 st.sidebar.header("Simulation Controls")
 st.sidebar.subheader("Experimental Parameters")
@@ -90,15 +137,26 @@ simulation_time = st.sidebar.slider(
 
 st.sidebar.divider()
 
-if st.sidebar.button("Run Simulation"):
-    st.session_state["run_simulation"] = True
+run_col, reset_col = st.sidebar.columns(2)
+
+with run_col:
+
+    if st.button("Run Simulation", use_container_width=True):
+        st.session_state["run_simulation"] = True
+
+with reset_col:
+
+    if st.button("Reset", use_container_width=True):
+        st.session_state["run_simulation"] = False
+        st.session_state["experiment_trials"] = []
+        st.rerun()
 
 
-# ------------------------------------------------
-# SIMULATION
-# ------------------------------------------------
+# ==================================================
+# 5. SIMULATION ENGINE
+# ==================================================
 
-if st.session_state.get("run_simulation", False):
+if st.session_state["run_simulation"]:
 
     effective_k = braking_coefficient_from_field(
         magnetic_field,
@@ -120,9 +178,10 @@ if st.session_state.get("run_simulation", False):
 
     st.success("Simulation completed successfully!")
 
-    # ------------------------------------------------
-    # 1. RESULTS
-    # ------------------------------------------------
+
+    # ==================================================
+    # 6. MAIN SIMULATION RESULTS
+    # ==================================================
 
     st.header("Simulation Results")
 
@@ -158,12 +217,73 @@ if st.session_state.get("run_simulation", False):
         "the simplified assumption k = C × B²."
     )
 
-    # ------------------------------------------------
-    # 2. DYNAMIC EDDY CURRENT BRAKE ANIMATION
-    # ------------------------------------------------
+
+    # ==================================================
+    # 7. EXPERIMENT TRIAL RECORDING
+    # ==================================================
 
     st.divider()
+    st.subheader("Experiment Trial Recording")
 
+    if st.button("Record Current Trial"):
+
+        trial_number = (
+            len(st.session_state["experiment_trials"]) + 1
+        )
+
+        trial_data = {
+            "Trial": trial_number,
+            "Magnetic Field (T)": magnetic_field,
+            "Initial Angular Velocity (rad/s)": initial_velocity,
+            "Moment of Inertia (kg·m²)": moment_of_inertia,
+            "Effective k": effective_k,
+            "Final Angular Velocity (rad/s)": omega[-1],
+            "Final Braking Torque (N·m)": torque[-1],
+            "Final Kinetic Energy (J)": kinetic_energy[-1]
+        }
+
+        st.session_state["experiment_trials"].append(trial_data)
+
+        st.success(
+            f"Trial {trial_number} recorded successfully!"
+        )
+
+    if st.session_state["experiment_trials"]:
+
+        trial_df = pd.DataFrame(
+            st.session_state["experiment_trials"]
+        )
+
+        st.dataframe(
+            trial_df.round(5),
+            use_container_width=True
+        )
+
+        st.download_button(
+            "Download Experiment Trials (CSV)",
+            trial_df.to_csv(index=False),
+            file_name="eddylab_experiment_trials.csv",
+            mime="text/csv"
+        )
+
+        if st.button("Clear All Trials"):
+
+            st.session_state["experiment_trials"] = []
+            st.rerun()
+
+    else:
+
+        st.info(
+            "No trials recorded yet. Run a simulation and "
+            "record your first trial."
+        )
+
+
+    # ==================================================
+    # 8. DYNAMIC EDDY CURRENT BRAKE ANIMATION
+    # ==================================================
+
+    st.divider()
     st.subheader("Dynamic Eddy Current Brake Simulation")
 
     st.caption(
@@ -171,15 +291,11 @@ if st.session_state.get("run_simulation", False):
         "angular displacement of the disc."
     )
 
-    # Calculate angular displacement at every time step
-
     angular_position = np.zeros(len(time))
 
     angular_position[1:] = np.cumsum(
         0.5 * (omega[:-1] + omega[1:]) * np.diff(time)
     )
-
-    # Select up to 60 animation frames
 
     frame_indices = np.linspace(
         0,
@@ -187,8 +303,6 @@ if st.session_state.get("run_simulation", False):
         min(60, len(time)),
         dtype=int
     )
-
-    initial_angle = angular_position[0]
 
     fig_animation = go.Figure()
 
@@ -212,14 +326,8 @@ if st.session_state.get("run_simulation", False):
 
     fig_animation.add_trace(
         go.Scatter(
-            x=[
-                0,
-                0.85 * np.cos(initial_angle)
-            ],
-            y=[
-                0,
-                0.85 * np.sin(initial_angle)
-            ],
+            x=[0, 0.85],
+            y=[0, 0],
             mode="lines",
             line=dict(color="#f39c12", width=5),
             name="Rotating Marker"
@@ -295,9 +403,7 @@ if st.session_state.get("run_simulation", False):
             )
         )
 
-    # ------------------------------------------------
-    # 3. GENERATE ANIMATION FRAMES
-    # ------------------------------------------------
+    # Generate animation frames
 
     animation_frames = []
 
@@ -326,9 +432,7 @@ if st.session_state.get("run_simulation", False):
 
     fig_animation.frames = animation_frames
 
-    # ------------------------------------------------
-    # 4. ANIMATION CONTROLS
-    # ------------------------------------------------
+    # Animation controls
 
     fig_animation.update_layout(
         height=500,
@@ -396,9 +500,7 @@ if st.session_state.get("run_simulation", False):
         ]
     )
 
-    # ------------------------------------------------
-    # 5. DISPLAY ANIMATION AND READINGS
-    # ------------------------------------------------
+    # Display animation and readings
 
     animation_col, readings_col = st.columns([2, 1])
 
@@ -444,16 +546,13 @@ if st.session_state.get("run_simulation", False):
         "and current loops are illustrative."
     )
 
-    # ------------------------------------------------
-    # 6. BRAKING STRENGTH INDICATOR
-    # ------------------------------------------------
+
+    # ==================================================
+    # 9. BRAKING STRENGTH INDICATOR
+    # ==================================================
 
     st.divider()
-
     st.subheader("Braking Strength Indicator")
-
-    # Normalized B² indicator.
-    # This is not measured braking efficiency.
 
     braking_level = (
         magnetic_field / 1.0
@@ -481,9 +580,10 @@ if st.session_state.get("run_simulation", False):
         "constant. It is not experimentally measured efficiency."
     )
 
-    # ------------------------------------------------
-    # 7. AUTOMATIC PHYSICS OBSERVATION
-    # ------------------------------------------------
+
+    # ==================================================
+    # 10. AUTOMATIC PHYSICS OBSERVATION
+    # ==================================================
 
     st.subheader("Physics Insights")
 
@@ -514,12 +614,12 @@ if st.session_state.get("run_simulation", False):
             "braking and a faster reduction in angular velocity."
         )
 
+
+    # ==================================================
+    # 11. ANGULAR VELOCITY GRAPH
+    # ==================================================
+
     st.divider()
-
-    # ------------------------------------------------
-    # 8. ANGULAR VELOCITY GRAPH
-    # ------------------------------------------------
-
     st.subheader("1. Angular Velocity vs Time")
 
     fig_velocity = go.Figure()
@@ -545,9 +645,10 @@ if st.session_state.get("run_simulation", False):
         use_container_width=True
     )
 
-    # ------------------------------------------------
-    # 9. BRAKING TORQUE GRAPH
-    # ------------------------------------------------
+
+    # ==================================================
+    # 12. BRAKING TORQUE GRAPH
+    # ==================================================
 
     st.subheader("2. Braking Torque vs Time")
 
@@ -574,12 +675,12 @@ if st.session_state.get("run_simulation", False):
         use_container_width=True
     )
 
-    # ------------------------------------------------
-    # 10. MAGNETIC FIELD COMPARISON TABLE
-    # ------------------------------------------------
+
+    # ==================================================
+    # 13. MAGNETIC FIELD COMPARISON TABLE
+    # ==================================================
 
     st.divider()
-
     st.subheader("3. Magnetic Field Comparison Data")
 
     comparison_fields = [0.2, 0.5, 0.8]
@@ -605,17 +706,11 @@ if st.session_state.get("run_simulation", False):
         )
 
         comparison_results.append({
-
             "Magnetic Field (T)": field,
-
             "Effective k": comparison_k,
-
             "Final Angular Velocity (rad/s)": comp_omega[-1],
-
             "Final Braking Torque (N·m)": comp_torque[-1],
-
             "Final Kinetic Energy (J)": comp_energy[-1]
-
         })
 
     comparison_df = pd.DataFrame(comparison_results)
@@ -637,9 +732,10 @@ if st.session_state.get("run_simulation", False):
         "moment of inertia and system constant for all three cases."
     )
 
-    # ------------------------------------------------
-    # 11. KINETIC ENERGY GRAPH
-    # ------------------------------------------------
+
+    # ==================================================
+    # 14. KINETIC ENERGY GRAPH
+    # ==================================================
 
     st.subheader("4. Rotational Kinetic Energy vs Time")
 
@@ -666,9 +762,10 @@ if st.session_state.get("run_simulation", False):
         use_container_width=True
     )
 
-    # ------------------------------------------------
-    # 12. MAGNETIC FIELD COMPARISON GRAPH
-    # ------------------------------------------------
+
+    # ==================================================
+    # 15. MAGNETIC FIELD COMPARISON GRAPH
+    # ==================================================
 
     st.subheader("5. Magnetic Field Comparison")
 
@@ -711,12 +808,12 @@ if st.session_state.get("run_simulation", False):
         use_container_width=True
     )
 
-    # ------------------------------------------------
-    # 13. ADDITIONAL RESULTS
-    # ------------------------------------------------
+
+    # ==================================================
+    # 16. ADDITIONAL SIMULATION RESULTS
+    # ==================================================
 
     st.divider()
-
     st.subheader("6. Additional Simulation Data")
 
     result_col1, result_col2 = st.columns(2)
@@ -731,22 +828,18 @@ if st.session_state.get("run_simulation", False):
         f"{angular_displacement:.3f} rad"
     )
 
-    # ------------------------------------------------
-    # 14. OBSERVATION TABLE
-    # ------------------------------------------------
+
+    # ==================================================
+    # 17. OBSERVATION TABLE
+    # ==================================================
 
     st.subheader("7. Virtual Experiment Observation Table")
 
     observations = pd.DataFrame({
-
         "Time (s)": time,
-
         "Angular Velocity (rad/s)": omega,
-
         "Braking Torque (N·m)": torque,
-
         "Kinetic Energy (J)": kinetic_energy
-
     })
 
     st.dataframe(
@@ -762,11 +855,11 @@ if st.session_state.get("run_simulation", False):
     )
 
 
-else:
+# ==================================================
+# 18. INTRODUCTION SCREEN
+# ==================================================
 
-    # ------------------------------------------------
-    # INTRODUCTION / INSTRUCTIONS
-    # ------------------------------------------------
+else:
 
     st.info(
         "Adjust the experimental parameters and click Run Simulation."
@@ -809,9 +902,9 @@ else:
     )
 
 
-# ------------------------------------------------
-# FOOTER
-# ------------------------------------------------
+# ==================================================
+# 19. FOOTER
+# ==================================================
 
 st.divider()
 
