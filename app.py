@@ -9,6 +9,8 @@ from physics import (
     braking_coefficient_from_field
 )
 
+from eddylab_component import eddylab_3d
+
 
 # ==================================================
 # 1. PAGE CONFIGURATION AND SESSION STATE
@@ -20,11 +22,16 @@ st.set_page_config(
     layout="wide"
 )
 
-if "run_simulation" not in st.session_state:
-    st.session_state["run_simulation"] = False
+defaults = {
+    "run_simulation": False,
+    "experiment_trials": [],
+    "magnet_air_gap": 0.24,
+    "simulation_run_id": 0
+}
 
-if "experiment_trials" not in st.session_state:
-    st.session_state["experiment_trials"] = []
+for key, value in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
 
 
 # ==================================================
@@ -129,11 +136,16 @@ system_constant = st.sidebar.slider(
 )
 
 simulation_time = st.sidebar.slider(
-    "Simulation Duration (seconds)",
+    "Reference Simulation Duration (seconds)",
     min_value=1,
     max_value=30,
     value=10
 )
+
+
+# ==================================================
+# 5. SIMULATION BUTTONS
+# ==================================================
 
 st.sidebar.divider()
 
@@ -141,27 +153,109 @@ run_col, reset_col = st.sidebar.columns(2)
 
 with run_col:
 
-    if st.button("Run Simulation", use_container_width=True):
+    if st.button(
+        "Run Simulation",
+        use_container_width=True
+    ):
+
         st.session_state["run_simulation"] = True
+
+        # A new ID starts a genuinely new simulation.
+        st.session_state["simulation_run_id"] += 1
+
 
 with reset_col:
 
-    if st.button("Reset", use_container_width=True):
+    if st.button(
+        "Reset",
+        use_container_width=True
+    ):
+
         st.session_state["run_simulation"] = False
+
         st.session_state["experiment_trials"] = []
+
+        st.session_state["simulation_run_id"] = 0
+
         st.rerun()
 
 
 # ==================================================
-# 5. SIMULATION ENGINE
+# 6. INTERACTIVE 3D APPARATUS
+# ==================================================
+
+st.divider()
+st.header("Interactive 3D Eddy Current Brake")
+
+st.caption(
+    "Drag the magnetic assemblies along the shaft axis. "
+    "The magnets move symmetrically around the copper disc. "
+    "During an active simulation, magnet movement changes "
+    "the braking effect continuously."
+)
+
+magnet_data = eddylab_3d(
+    initial_angular_velocity=initial_velocity,
+    moment_of_inertia=moment_of_inertia,
+    magnetic_field=magnetic_field,
+    system_constant=system_constant,
+    simulation_time=simulation_time,
+    air_gap=st.session_state["magnet_air_gap"],
+    run_simulation=st.session_state["run_simulation"],
+    run_id=st.session_state["simulation_run_id"],
+    key="eddylab_3d"
+)
+
+
+# Receive magnet movement from the 3D component.
+
+if isinstance(magnet_data, dict):
+
+    if "air_gap" in magnet_data:
+
+        new_gap = float(magnet_data["air_gap"])
+
+        if np.isfinite(new_gap):
+
+            st.session_state["magnet_air_gap"] = max(
+                0.0,
+                new_gap
+            )
+
+air_gap = st.session_state["magnet_air_gap"]
+
+st.metric(
+    "Magnet-to-Disc Air Gap",
+    f"{air_gap:.3f} model units"
+)
+
+
+# ==================================================
+# 7. PYTHON REFERENCE SIMULATION
 # ==================================================
 
 if st.session_state["run_simulation"]:
 
+    reference_gap = 0.24
+
+    # Calculate effective magnetic field using
+    # the magnet gap at the time of calculation.
+
+    effective_magnetic_field = np.clip(
+        magnetic_field
+        * (reference_gap / max(air_gap, 0.04)) ** 2,
+        0.1,
+        1.0
+    )
+
+    # Calculate effective braking coefficient.
+
     effective_k = braking_coefficient_from_field(
-        magnetic_field,
+        effective_magnetic_field,
         system_constant
     )
+
+    # Generate analytical reference results.
 
     time, omega, torque = simulate_braking(
         initial_velocity,
@@ -174,13 +268,47 @@ if st.session_state["run_simulation"]:
         0.5 * moment_of_inertia * omega**2
     )
 
-    angular_displacement = np.trapezoid(omega, time)
+    angular_displacement = np.trapezoid(
+        omega,
+        time
+    )
 
-    st.success("Simulation completed successfully!")
+    st.success(
+        "Reference calculations generated successfully. "
+        "The 3D apparatus runs its own continuous simulation."
+    )
 
 
     # ==================================================
-    # 6. MAIN SIMULATION RESULTS
+    # 8. EFFECTIVE PARAMETERS
+    # ==================================================
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+
+        st.metric(
+            "Effective Magnetic Field",
+            f"{effective_magnetic_field:.3f} T"
+        )
+
+    with col2:
+
+        st.metric(
+            "Effective Braking Coefficient",
+            f"{effective_k:.5f}"
+        )
+
+    with col3:
+
+        st.metric(
+            "Magnet-to-Disc Air Gap",
+            f"{air_gap:.3f} model units"
+        )
+
+
+    # ==================================================
+    # 9. MAIN SIMULATION RESULTS
     # ==================================================
 
     st.header("Simulation Results")
@@ -213,13 +341,13 @@ if st.session_state["run_simulation"]:
     )
 
     st.caption(
-        "The effective braking coefficient is calculated using "
+        "The reference braking coefficient is calculated using "
         "the simplified assumption k = C × B²."
     )
 
 
     # ==================================================
-    # 7. EXPERIMENT TRIAL RECORDING
+    # 10. EXPERIMENT TRIAL RECORDING
     # ==================================================
 
     st.divider()
@@ -233,7 +361,8 @@ if st.session_state["run_simulation"]:
 
         trial_data = {
             "Trial": trial_number,
-            "Magnetic Field (T)": magnetic_field,
+            "Magnetic Field (T)": effective_magnetic_field,
+            "Magnet Air Gap (model units)": air_gap,
             "Initial Angular Velocity (rad/s)": initial_velocity,
             "Moment of Inertia (kg·m²)": moment_of_inertia,
             "Effective k": effective_k,
@@ -242,7 +371,9 @@ if st.session_state["run_simulation"]:
             "Final Kinetic Energy (J)": kinetic_energy[-1]
         }
 
-        st.session_state["experiment_trials"].append(trial_data)
+        st.session_state["experiment_trials"].append(
+            trial_data
+        )
 
         st.success(
             f"Trial {trial_number} recorded successfully!"
@@ -269,6 +400,7 @@ if st.session_state["run_simulation"]:
         if st.button("Clear All Trials"):
 
             st.session_state["experiment_trials"] = []
+
             st.rerun()
 
     else:
@@ -280,15 +412,16 @@ if st.session_state["run_simulation"]:
 
 
     # ==================================================
-    # 8. DYNAMIC EDDY CURRENT BRAKE ANIMATION
+    # 11. REFERENCE EDDY CURRENT BRAKE ANIMATION
     # ==================================================
 
     st.divider()
-    st.subheader("Dynamic Eddy Current Brake Simulation")
+    st.subheader("Reference Eddy Current Brake Animation")
 
     st.caption(
-        "The radial marker rotates according to the calculated "
-        "angular displacement of the disc."
+        "This separate 2D animation illustrates the calculated "
+        "reference angular displacement. The interactive 3D "
+        "apparatus above uses continuous magnet-responsive physics."
     )
 
     angular_position = np.zeros(len(time))
@@ -306,9 +439,9 @@ if st.session_state["run_simulation"]:
 
     fig_animation = go.Figure()
 
-    # Conducting disc
-
     theta = np.linspace(0, 2 * np.pi, 100)
+
+    # Conducting disc
 
     fig_animation.add_trace(
         go.Scatter(
@@ -341,10 +474,7 @@ if st.session_state["run_simulation"]:
             x=[0],
             y=[0],
             mode="markers",
-            marker=dict(
-                size=14,
-                color="#2c3e50"
-            ),
+            marker=dict(size=14, color="#2c3e50"),
             name="Disc Centre"
         )
     )
@@ -397,13 +527,10 @@ if st.session_state["run_simulation"]:
             y0=-0.12,
             x1=x_position + 0.12,
             y1=0.12,
-            line=dict(
-                color="#e67e22",
-                width=2
-            )
+            line=dict(color="#e67e22", width=2)
         )
 
-    # Generate animation frames
+    # Animation frames
 
     animation_frames = []
 
@@ -431,8 +558,6 @@ if st.session_state["run_simulation"]:
         )
 
     fig_animation.frames = animation_frames
-
-    # Animation controls
 
     fig_animation.update_layout(
         height=500,
@@ -500,8 +625,6 @@ if st.session_state["run_simulation"]:
         ]
     )
 
-    # Display animation and readings
-
     animation_col, readings_col = st.columns([2, 1])
 
     with animation_col:
@@ -513,7 +636,7 @@ if st.session_state["run_simulation"]:
 
     with readings_col:
 
-        st.subheader("Simulation Readings")
+        st.subheader("Reference Simulation Readings")
 
         st.metric(
             "Initial Angular Velocity",
@@ -536,26 +659,26 @@ if st.session_state["run_simulation"]:
         )
 
         st.metric(
-            "Total Simulation Time",
+            "Reference Simulation Time",
             f"{time[-1]:.1f} s"
         )
 
     st.info(
-        "The animation uses calculated angular displacement "
-        "from the simplified braking model. The magnetic poles "
+        "The 2D animation uses calculated angular displacement "
+        "from the simplified reference model. The magnetic poles "
         "and current loops are illustrative."
     )
 
 
     # ==================================================
-    # 9. BRAKING STRENGTH INDICATOR
+    # 12. BRAKING STRENGTH INDICATOR
     # ==================================================
 
     st.divider()
     st.subheader("Braking Strength Indicator")
 
     braking_level = (
-        magnetic_field / 1.0
+        effective_magnetic_field / 1.0
     ) ** 2 * 100
 
     indicator_col1, indicator_col2 = st.columns(2)
@@ -576,23 +699,24 @@ if st.session_state["run_simulation"]:
 
     st.caption(
         "The indicator represents the normalized B² relationship "
-        "for the selected magnetic field, assuming a fixed system "
-        "constant. It is not experimentally measured efficiency."
+        "for the effective magnetic field. It is not experimentally "
+        "measured efficiency."
     )
 
 
     # ==================================================
-    # 10. AUTOMATIC PHYSICS OBSERVATION
+    # 13. AUTOMATIC PHYSICS OBSERVATION
     # ==================================================
 
     st.subheader("Physics Insights")
 
     st.write(
-        f"At a magnetic field strength of {magnetic_field:.2f} T, "
-        f"the effective braking coefficient is {effective_k:.5f}."
+        f"At an effective magnetic field strength of "
+        f"{effective_magnetic_field:.2f} T, "
+        f"the reference braking coefficient is {effective_k:.5f}."
     )
 
-    if magnetic_field < 0.35:
+    if effective_magnetic_field < 0.35:
 
         st.info(
             "Lower magnetic field: The model predicts a relatively "
@@ -600,7 +724,7 @@ if st.session_state["run_simulation"]:
             "angular velocity."
         )
 
-    elif magnetic_field < 0.65:
+    elif effective_magnetic_field < 0.65:
 
         st.info(
             "Moderate magnetic field: The model predicts a "
@@ -616,7 +740,7 @@ if st.session_state["run_simulation"]:
 
 
     # ==================================================
-    # 11. ANGULAR VELOCITY GRAPH
+    # 14. ANGULAR VELOCITY GRAPH
     # ==================================================
 
     st.divider()
@@ -647,7 +771,7 @@ if st.session_state["run_simulation"]:
 
 
     # ==================================================
-    # 12. BRAKING TORQUE GRAPH
+    # 15. BRAKING TORQUE GRAPH
     # ==================================================
 
     st.subheader("2. Braking Torque vs Time")
@@ -677,7 +801,7 @@ if st.session_state["run_simulation"]:
 
 
     # ==================================================
-    # 13. MAGNETIC FIELD COMPARISON TABLE
+    # 16. MAGNETIC FIELD COMPARISON TABLE
     # ==================================================
 
     st.divider()
@@ -734,7 +858,7 @@ if st.session_state["run_simulation"]:
 
 
     # ==================================================
-    # 14. KINETIC ENERGY GRAPH
+    # 17. KINETIC ENERGY GRAPH
     # ==================================================
 
     st.subheader("4. Rotational Kinetic Energy vs Time")
@@ -764,7 +888,7 @@ if st.session_state["run_simulation"]:
 
 
     # ==================================================
-    # 15. MAGNETIC FIELD COMPARISON GRAPH
+    # 18. MAGNETIC FIELD COMPARISON GRAPH
     # ==================================================
 
     st.subheader("5. Magnetic Field Comparison")
@@ -810,7 +934,7 @@ if st.session_state["run_simulation"]:
 
 
     # ==================================================
-    # 16. ADDITIONAL SIMULATION RESULTS
+    # 19. ADDITIONAL SIMULATION RESULTS
     # ==================================================
 
     st.divider()
@@ -830,7 +954,7 @@ if st.session_state["run_simulation"]:
 
 
     # ==================================================
-    # 17. OBSERVATION TABLE
+    # 20. OBSERVATION TABLE
     # ==================================================
 
     st.subheader("7. Virtual Experiment Observation Table")
@@ -856,7 +980,7 @@ if st.session_state["run_simulation"]:
 
 
 # ==================================================
-# 18. INTRODUCTION SCREEN
+# 21. INTRODUCTION SCREEN
 # ==================================================
 
 else:
@@ -872,7 +996,7 @@ else:
     2. Adjust the moment of inertia.
     3. Set the magnetic field strength.
     4. Adjust the effective system constant.
-    5. Select the simulation duration.
+    5. Select the reference simulation duration.
     6. Run the simulation and examine the resulting graphs.
 
     **Magnetic-field relationship:**
@@ -903,7 +1027,7 @@ else:
 
 
 # ==================================================
-# 19. FOOTER
+# 22. FOOTER
 # ==================================================
 
 st.divider()
